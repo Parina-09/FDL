@@ -1,0 +1,70 @@
+import numpy as np
+import matplotlib.pyplot as plt
+from sklearn.metrics import classification_report, confusion_matrix
+import seaborn as sns
+from tensorflow.keras.datasets import cifar10
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.applications import VGG16
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Dense, Flatten, Dropout
+from tensorflow.keras.optimizers import Adam
+from tensorflow.keras.applications.vgg16 import preprocess_input
+# Load and preprocess the CIFAR-10 dataset
+(x_train, y_train), (x_test, y_test) = cifar10.load_data()
+x_train = preprocess_input(x_train.astype('float32'))
+x_test = preprocess_input(x_test.astype('float32'))
+y_train_cat = to_categorical(y_train, 10)
+y_test_cat = to_categorical(y_test, 10)
+# Load pre-trained VGG16 without the top layer
+base_model = VGG16(weights='imagenet', include_top=False, input_shape=(32, 32, 3))
+# Freeze base layers
+for layer in base_model.layers:
+    layer.trainable = False
+# Add custom top layers
+x = Flatten()(base_model.output)
+x = Dense(256, activation='relu')(x)
+x = Dropout(0.5)(x)
+x = Dense(10, activation='softmax')(x)
+# Final model
+model = Model(inputs=base_model.input, outputs=x)
+model.compile(optimizer=Adam(), loss='categorical_crossentropy', metrics=['accuracy'])
+# Train the model
+history = model.fit(x_train, y_train_cat, epochs=10, batch_size=64, validation_data=(x_test, y_test_cat))
+# Evaluate the model
+loss, accuracy = model.evaluate(x_test, y_test_cat)
+print(f"Test Accuracy: {accuracy:.4f}")
+ 
+# Predict and generate classification report
+y_pred = model.predict(x_test)
+y_pred_classes = np.argmax(y_pred, axis=1)
+y_true = y_test.flatten()
+print("\nClassification Report:")
+print(classification_report(y_true, y_pred_classes))
+ 
+# Confusion Matrix
+cm = confusion_matrix(y_true, y_pred_classes)
+plt.figure(figsize=(10,7))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues')
+plt.title("Confusion Matrix")
+plt.xlabel("Predicted Label")
+plt.ylabel("True Label")
+plt.show()
+ 
+# Plot accuracy and loss
+plt.figure(figsize=(12,5))
+plt.subplot(1,2,1)
+plt.plot(history.history['accuracy'], label='Train Acc')
+plt.plot(history.history['val_accuracy'], label='Val Acc')
+plt.title("Model Accuracy")
+plt.xlabel("Epochs")
+plt.ylabel("Accuracy")
+plt.legend()
+plt.subplot(1,2,2)
+plt.plot(history.history['loss'], label='Train Loss')
+plt.plot(history.history['val_loss'], label='Val Loss')
+plt.title("Model Loss")
+plt.xlabel("Epochs")
+plt.ylabel("Loss")
+plt.legend()
+plt.tight_layout()
+plt.show()
