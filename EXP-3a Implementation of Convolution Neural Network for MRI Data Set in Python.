@@ -1,0 +1,155 @@
+import pandas as pd
+import numpy as np
+import cv2
+import os
+import random
+import matplotlib.pyplot as plt
+import seaborn as sns
+from matplotlib.image import imread
+
+import tensorflow as tf
+import tensorflow_hub as hub
+os.environ['TF_CPP_MIN_LOG_LEVEL'] = '3'
+
+from keras.models import Sequential
+from keras.layers import Conv2D, Activation, MaxPooling2D, Dense, Flatten, Dropout
+from keras.losses import BinaryCrossentropy
+from keras.optimizers import Adam
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import auc, roc_curve, accuracy_score, cohen_kappa_score
+
+import warnings
+warnings.filterwarnings('ignore')
+
+# Mount Google Drive
+from google.colab import drive
+drive.mount('/content/drive')
+
+MAIN_DIR = "/content/drive/My Drive/Brain_Tumor_Dataset"
+folder_no = os.path.join(MAIN_DIR, 'Negative')
+folder_yes = os.path.join(MAIN_DIR, 'Positive')
+
+# Verify directories exist
+if not os.path.exists(folder_no) or not os.path.exists(folder_yes):
+    raise FileNotFoundError(f"Dataset folders not found in {MAIN_DIR}")
+
+# Collect image paths
+image_paths = []
+for filepath in [folder_no, folder_yes]:
+    for f in os.listdir(filepath)[:3]:  # Take the first 3 images per folder
+        image_paths.append(os.path.join(filepath, f))
+
+fig, axes = plt.subplots(1, len(image_paths), figsize=(15, 5))
+for ax, img_path in zip(axes, image_paths):
+    image = imread(img_path)
+    ax.imshow(image)
+plt.tight_layout()
+plt.show()
+
+
+
+images, labels, filenames = [], [], []
+for gt in ['Positive', 'Negative']:
+    filepath_gt = os.path.join(MAIN_DIR, gt)
+    for f in os.listdir(filepath_gt):
+        filename = os.path.join(filepath_gt, f)
+        if '._' not in filename:
+            photo = tf.keras.utils.load_img(path=filename, target_size=(200, 200))
+            image = imread(filename)
+            resized_image = cv2.resize(image, dsize=(200, 200))
+            if len(resized_image.shape) == 3:
+                resized_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
+            images.append(resized_image)
+            filenames.append(filename)
+            labels.append(1 if gt == 'Positive' else 0)
+
+gtFr = pd.DataFrame({'pID': range(len(labels)), 'gt': labels, 'filename': filenames})
+trainFr, testFr = train_test_split(gtFr, test_size=0.2, stratify=gtFr['gt'])
+trainFr['set'] = 'train'
+testFr['set'] = 'test'
+gtFr2 = pd.concat([trainFr, testFr], axis=0)
+gtFr2.to_csv('base_model_train_test.csv', index=False)
+
+def load_images(df):
+    X, y = [], []
+    for _, row in df.iterrows():
+        image = imread(row['filename'])
+        resized_image = cv2.resize(image, dsize=(200, 200))
+        if len(resized_image.shape) == 3:
+            resized_image = cv2.cvtColor(resized_image, cv2.COLOR_BGR2GRAY)
+        X.append(resized_image)
+        y.append(row['gt'])
+    return np.array(X).reshape(len(df), 200, 200, 1), np.array(y)
+
+X_train, y_train = load_images(trainFr)
+X_test, y_test = load_images(testFr)
+
+# Create model
+model = Sequential([
+    Conv2D(64, kernel_size=3, activation='relu', input_shape=(200, 200, 1)),
+    MaxPooling2D(pool_size=(2, 2)),
+    Conv2D(32, kernel_size=3, activation='relu'),
+    MaxPooling2D(pool_size=(2, 2)),
+    Flatten(),
+    Dense(128, activation='relu'),
+    Dense(1, activation='sigmoid')
+])
+
+model.compile(optimizer=Adam(), loss='binary_crossentropy', metrics=['accuracy'])
+
+history = model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=10)
+
+
+
+def plot_curves(history):
+    loss, val_loss = history.history["loss"], history.history["val_loss"]
+    accuracy, val_accuracy = history.history["accuracy"], history.history["val_accuracy"]
+    epochs = range(len(loss))
+    fig, axes = plt.subplots(1, 2, figsize=(12, 5))
+    axes[0].plot(epochs, loss, label="training_loss")
+    axes[0].plot(epochs, val_loss, label="val_loss")
+    axes[0].set_title("Loss")
+    axes[0].legend()
+    axes[1].plot(epochs, accuracy, label="training_accuracy")
+    axes[1].plot(epochs, val_accuracy, label="val_accuracy")
+    axes[1].set_title("Accuracy")
+    axes[1].legend()
+    plt.tight_layout()
+    plt.show()
+
+plot_curves(history)
+
+# Make predictions
+predictions = model.predict(X_test)
+probabilities = predictions.flatten()
+testFr['pred'] = probabilities
+testFr.to_csv('base_model_predictions.csv', index=False)
+
+dataPos = testFr[testFr['gt'] == 1]['pred'].values
+dataNeg = testFr[testFr['gt'] == 0]['pred'].values
+dataAll = np.concatenate((dataPos, dataNeg))
+lblArr = np.array([1] * len(dataPos) + [0] * len(dataNeg))
+
+fpr, tpr, thresholds = roc_curve(lblArr, dataAll)
+roc_auc = auc(fpr, tpr)
+
+if roc_auc < 0.5:
+    lblArr = 1 - lblArr
+    fpr, tpr, thresholds = roc_curve(lblArr, dataAll)
+    roc_auc = auc(fpr, tpr)
+    print('Inverting labels')
+
+print(f'ROC AUC: {roc_auc:.2f}')
+distArr = np.sqrt(np.power(fpr, 2) + np.power(1 - tpr, 2))
+cutoffIdx = np.argmin(distArr)
+cutoffTh = thresholds[cutoffIdx]
+print(f'Cutoff threshold: {cutoffTh:.2f}')
+lblOut = dataAll >= cutoffTh
+acc = accuracy_score(lblArr, lblOut)
+print(f'Accuracy: {acc:.2f}')
+sens, spec = tpr[cutoffIdx], 1 - fpr[cutoffIdx]
+print(f'Sensitivity: {sens:.2f}')
+print(f'Specificity: {spec:.2f}')
+kappa = cohen_kappa_score(lblOut, lblArr)
+print(f'Cohen Kappa Score: {kappa:.2f}')
