@@ -1,0 +1,97 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import tensorflow as tf
+from tensorflow.keras.datasets import cifar10
+from tensorflow.keras.utils import to_categorical
+from tensorflow.keras.applications.inception_v3 import InceptionV3, preprocess_input
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
+from tensorflow.keras.optimizers import Adam
+from sklearn.metrics import classification_report, confusion_matrix
+import seaborn as sns
+import cv2
+import random
+
+# Load CIFAR-10 data
+(x_train, y_train), (x_test, y_test) = cifar10.load_data()
+y_train = y_train.flatten()
+y_test = y_test.flatten()
+
+# Class names for CIFAR-10
+class_labels = ['Airplane', 'Automobile', 'Bird', 'Cat', 'Deer',
+                'Dog', 'Frog', 'Horse', 'Ship', 'Truck']
+
+# Resize and preprocess images
+def preprocess_images(images):
+    resized_images = []
+    for img in images:
+        img = cv2.resize(img, (299, 299))  # Resize to InceptionV3 size
+        resized_images.append(img)
+    resized_images = np.array(resized_images)
+    return preprocess_input(resized_images)
+
+x_train = preprocess_images(x_train)
+x_test = preprocess_images(x_test)
+
+# One-hot encode labels
+y_train_cat = to_categorical(y_train, 10)
+y_test_cat = to_categorical(y_test, 10)
+
+# Load InceptionV3 without top
+base_model = InceptionV3(weights='imagenet', include_top=False, input_shape=(299, 299, 3))
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(1024, activation='relu')(x)
+predictions = Dense(10, activation='softmax')(x)
+model = Model(inputs=base_model.input, outputs=predictions)
+
+# Freeze base layers
+for layer in base_model.layers:
+    layer.trainable = False
+
+# Compile model
+model.compile(optimizer=Adam(learning_rate=0.0001),
+              loss='categorical_crossentropy',
+              metrics=['accuracy'])
+
+# Train the model
+history = model.fit(x_train, y_train_cat, epochs=10,
+                    validation_data=(x_test, y_test_cat), batch_size=32)
+
+# Evaluate the model
+loss, accuracy = model.evaluate(x_test, y_test_cat)
+print(f"Test Loss: {loss:.4f}")
+print(f"Test Accuracy: {accuracy:.4f}")
+
+# Predictions
+predictions = model.predict(x_test)
+y_pred = np.argmax(predictions, axis=1)
+
+# Classification report
+print("\nClassification Report:")
+print(classification_report(y_test, y_pred, target_names=class_labels))
+
+# Show random predictions
+num_images_to_display = 9
+indices = random.sample(range(len(x_test)), num_images_to_display)
+plt.figure(figsize=(12, 12))
+for i, idx in enumerate(indices):
+    img = x_test[idx]
+    true_label = class_labels[y_test[idx]]
+    predicted_label = class_labels[y_pred[idx]]
+    plt.subplot(3, 3, i + 1)
+    plt.imshow(cv2.cvtColor(img.astype(np.uint8), cv2.COLOR_RGB2BGR))
+    plt.title(f"Pred: {predicted_label}\nTrue: {true_label}")
+    plt.axis('off')
+plt.tight_layout()
+plt.show()
+
+# Confusion matrix
+cm = confusion_matrix(y_test, y_pred)
+plt.figure(figsize=(12, 10))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues',
+            xticklabels=class_labels, yticklabels=class_labels)
+plt.title('Confusion Matrix')
+plt.ylabel('True Label')
+plt.xlabel('Predicted Label')
+plt.show()
