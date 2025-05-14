@@ -1,0 +1,55 @@
+import numpy as np
+import pandas as pd
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.preprocessing import MinMaxScaler
+from sklearn.metrics import mean_squared_error, r2_score
+import tensorflow as tf
+from tensorflow.keras.models import Sequential
+from tensorflow.keras.layers import LSTM, Dense, Dropout
+from tensorflow.keras.optimizers import Adam
+df = pd.read_csv('NFLX.csv')  
+df = df[['Close']]
+print("Dataset Preview:")
+print(df.head())
+scaler = MinMaxScaler(feature_range=(0,1))
+scaled_data = scaler.fit_transform(df)
+def create_sequences(data, seq_length):
+    X, y = [], []
+    for i in range(len(data) - seq_length):
+        X.append(data[i:i+seq_length])
+        y.append(data[i+seq_length])
+    return np.array(X), np.array(y)
+seq_length = 60
+X, y = create_sequences(scaled_data, seq_length)
+split = int(len(X) * 0.8)
+X_train, X_test, y_train, y_test = X[:split], X[split:], y[:split], y[split:]
+model = Sequential([
+    LSTM(units=50, return_sequences=True, input_shape=(seq_length, 1)),
+    Dropout(0.2),
+    LSTM(units=50, return_sequences=True),
+    Dropout(0.2),
+    LSTM(units=50),
+    Dropout(0.2),
+    Dense(units=1)
+])
+model.compile(optimizer=Adam(learning_rate=0.001), loss='mean_squared_error')
+model.summary()
+history = model.fit(X_train, y_train, epochs=10, batch_size=32, validation_data=(X_test, y_test))
+y_pred = model.predict(X_test)
+y_pred = scaler.inverse_transform(y_pred)
+y_test = scaler.inverse_transform(y_test)
+mse = mean_squared_error(y_test, y_pred)
+rmse = np.sqrt(mse)
+r2 = r2_score(y_test, y_pred)
+print(f"Mean Squared Error: {mse}")
+print(f"Root Mean Squared Error: {rmse}")
+print(f"R² Score: {r2}")
+plt.figure(figsize=(12,6))
+plt.plot(y_test, label='Actual Price', color='blue')
+plt.plot(y_pred, label='Predicted Price', color='red')
+plt.title("Stock Price Prediction using LSTM")
+plt.xlabel("Time")
+plt.ylabel("Stock Price")
+plt.legend()
+plt.show()
