@@ -1,0 +1,70 @@
+import numpy as np
+import cv2
+import os
+import pandas as pd
+from matplotlib.image import imread
+
+from keras.models import Sequential
+from keras.layers import Conv2D, MaxPooling2D, Flatten, Dense
+from keras.optimizers import Adam
+
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import accuracy_score
+
+# Set dataset paths
+MAIN_DIR = "/content/drive/My Drive/Brain_Tumor_Dataset"
+folder_no = os.path.join(MAIN_DIR, 'Negative')
+folder_yes = os.path.join(MAIN_DIR, 'Positive')
+
+# Load image paths and labels
+images, labels, filenames = [], [], []
+for gt in ['Positive', 'Negative']:
+    path = os.path.join(MAIN_DIR, gt)
+    for f in os.listdir(path):
+        file_path = os.path.join(path, f)
+        if '._' not in file_path:
+            image = imread(file_path)
+            image = cv2.resize(image, (200, 200))
+            if len(image.shape) == 3:
+                image = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+            images.append(image)
+            labels.append(1 if gt == 'Positive' else 0)
+            filenames.append(file_path)
+
+# Prepare dataframe and split
+df = pd.DataFrame({'filename': filenames, 'label': labels})
+train_df, test_df = train_test_split(df, test_size=0.2, stratify=df['label'])
+
+# Image loader
+def load_images(df):
+    X, y = [], []
+    for _, row in df.iterrows():
+        img = imread(row['filename'])
+        img = cv2.resize(img, (200, 200))
+        if len(img.shape) == 3:
+            img = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+        X.append(img)
+        y.append(row['label'])
+    return np.array(X).reshape(len(X), 200, 200, 1), np.array(y)
+
+X_train, y_train = load_images(train_df)
+X_test, y_test = load_images(test_df)
+
+# Build CNN model
+model = Sequential([
+    Conv2D(64, 3, activation='relu', input_shape=(200, 200, 1)),
+    MaxPooling2D(2),
+    Conv2D(32, 3, activation='relu'),
+    MaxPooling2D(2),
+    Flatten(),
+    Dense(128, activation='relu'),
+    Dense(1, activation='sigmoid')
+])
+
+model.compile(optimizer=Adam(), loss='binary_crossentropy', metrics=['accuracy'])
+model.fit(X_train, y_train, validation_data=(X_test, y_test), epochs=10)
+
+# Accuracy calculation
+predictions = (model.predict(X_test) > 0.5).astype("int32").flatten()
+accuracy = accuracy_score(y_test, predictions)
+print(f"Accuracy: {accuracy:.2f}")
